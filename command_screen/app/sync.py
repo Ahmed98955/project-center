@@ -1,6 +1,7 @@
 """Sync engine: polls the Projects Station every POLL_SECONDS and mirrors forwarded faxes locally."""
 import json
 import queue
+import re
 import threading
 import time
 import urllib.error
@@ -16,6 +17,8 @@ _stop = threading.Event()
 
 STATUS = {"connected": False, "station_device": None, "station_url": None,
           "last_ok": None, "last_error": None, "last_poll": None}
+
+_SESSION = {"token": None, "base": None}
 
 
 def subscribe():
@@ -41,22 +44,65 @@ def publish(event):
             pass
 
 
-def _req(method, url, payload=None, timeout=6, raw=False):
+def _req(method, url, payload=None, timeout=6, raw=False, cookie=None, want_headers=False):
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8") if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method,
-                                 headers={"Accept": "application/json", "Content-Type": "application/json"})
+    headers = {"Accept": "application/json", "Content-Type": "application/json"}
+    if cookie:
+        headers["Cookie"] = cookie
+    req = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
         with urllib.request.urlopen(req, timeout=timeout) as r:
             body = r.read()
-            return r.status, (body if raw else (json.loads(body.decode("utf-8")) if body else {}))
+            parsed = body if raw else (json.loads(body.decode("utf-8")) if body else {})
+            if want_headers:
+                return r.status, parsed, r.headers
+            return r.status, parsed
     except urllib.error.HTTPError as e:
         try:
             detail = json.loads(e.read().decode("utf-8")).get("detail", str(e))
         except Exception:
             detail = str(e)
-        return e.code, {"detail": detail}
+        out = (e.code, {"detail": detail})
+        return (*out, None) if want_headers else out
     except Exception as e:
-        return 0, {"detail": str(e)}
+        out = (0, {"detail": str(e)})
+        return (*out, None) if want_headers else out
+
+
+# ---------------------------------------------------------------- station session auth
+def _station_creds(conn):
+    return (db.get_setting(conn, "station_user", "sync") or "sync",
+            db.get_setting(conn, "station_pass", "Sync@2026") or "Sync@2026")
+
+
+def _ensure_token(conn, base):
+    """Return a station session cookie, logging in if needed."""
+    if _SESSION["token"] and _SESSION["base"] == base:
+        return _SESSION["token"]
+    _SESSION["token"] = None
+    _SESSION["base"] = base
+    user, pw = _station_creds(conn)
+    code, data, headers = _req("POST", f"{base}/api/auth/login",
+                               payload={"username": user, "password": pw}, timeout=6, want_headers=True)
+    if code != 200 or not headers:
+        return None
+    m = re.search(r"ps_session=([^;\s]+)", headers.get("Set-Cookie", "") or "")
+    _SESSION["token"] = m.group(1) if m else None
+    return _SESSION["token"]
+
+
+def _sreq(conn, method, url, retry=True, **kw):
+    """Station API request with session cookie; re-login once on 401."""
+    base = station_url(conn)
+    token = _ensure_token(conn, base)
+    cookie = f"ps_session={token}" if token else None
+    code, data = _req(method, url, cookie=cookie, **kw)
+    if code == 401 and retry:
+        _SESSION["token"] = None
+        token = _ensure_token(conn, base)
+        cookie = f"ps_session={token}" if token else None
+        code, data = _req(method, url, cookie=cookie, **kw)
+    return code, data
 
 
 def station_url(conn):
@@ -97,7 +143,7 @@ def _maybe_file(conn, base, ticket):
     existing = db.one(conn, "SELECT file_name FROM tickets WHERE id=?", (tid,))
     if existing and existing.get("file_name"):
         return
-    code, data = _req("GET", f"{base}/api/tickets/{tid}/file", timeout=15, raw=True)
+    code, data = _sreq(conn, "GET", f"{base}/api/tickets/{tid}/file", timeout=15, raw=True)
     if code != 200 or not isinstance(data, (bytes, bytearray)):
         return
     config.UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -157,7 +203,7 @@ def _brief(t):
 def _cache_reference(conn, base):
     changed = False
     for key, path in (("meta", "/api/meta"), ("routes", "/api/routes"), ("teams", "/api/teams")):
-        code, data = _req("GET", base + path, timeout=8)
+        code, data = _sreq(conn, "GET", base + path, timeout=8)
         if code != 200:
             continue
         payload = json.dumps(data, ensure_ascii=False, default=str)
@@ -188,7 +234,7 @@ def poll_once():
         device = health.get("device")
         _set_conn(conn, True, device=device)
 
-        code, items = _req("GET", f"{base}/api/command/feed?since_id={last_id}&limit=200", timeout=8)
+        code, items = _sreq(conn, "GET", f"{base}/api/command/feed?since_id={last_id}&limit=200", timeout=8)
         if code != 200:
             _set_conn(conn, False, error=(items or {}).get("detail") or f"HTTP {code}")
             conn.commit()
@@ -211,13 +257,13 @@ def poll_once():
                     row = db.one(conn, "SELECT id FROM alert_events WHERE dedupe_key=?", (a["dedupe"],))
                     events.append({"type": "alert", "alert": {**a, "id": row["id"] if row else None}})
             ticket_events.append(ticket.get("id"))
-            code2, _ = _req("POST", f"{base}/api/command/ack/{it.get('id')}", timeout=4)
+            code2, _ = _sreq(conn, "POST", f"{base}/api/command/ack/{it.get('id')}", timeout=4)
         if max_id != last_id:
             db.state_set(conn, "feed_id", str(max_id))
         for tid in dict.fromkeys(ticket_events):
             events.append({"type": "ticket", "id": tid})
 
-        code, dirs = _req("GET", f"{base}/api/command/directives?since_id={dir_id}&limit=200", timeout=6)
+        code, dirs = _sreq(conn, "GET", f"{base}/api/command/directives?since_id={dir_id}&limit=200", timeout=6)
         if code == 200 and isinstance(dirs, list):
             dmax = dir_id
             for d in dirs:
@@ -252,7 +298,7 @@ def send_command(action, conn=None, **fields):
     try:
         base = station_url(conn)
         payload = {"action": action, "device": db.DEVICE, **fields}
-        code, data = _req("POST", base + "/api/command/inbox", payload=payload, timeout=8)
+        code, data = _sreq(conn, "POST", base + "/api/command/inbox", payload=payload, timeout=8)
         ok = code == 200 and isinstance(data, dict) and data.get("ok", True)
         conn.execute(
             "INSERT INTO command_log(action, request_json, ok, response_json, at) VALUES (?,?,?,?,?)",

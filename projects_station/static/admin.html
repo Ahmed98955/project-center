@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>إدارة الحسابات — محطة قسم المشروعات</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Segoe UI', Tahoma, Arial, sans-serif; background: #0f1f3d; color: #e8eefc; min-height: 100vh; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 14px 26px;
+           background: rgba(0,0,0,.25); border-bottom: 1px solid rgba(245,185,65,.3); }
+  header h1 { font-size: 18px; color: #f5b941; }
+  header .who { font-size: 12.5px; color: #9fb2d8; }
+  header a { color: #9fb2d8; text-decoration: none; font-size: 13px; margin-inline-start: 14px; }
+  header a:hover { color: #f5b941; }
+  main { max-width: 1100px; margin: 26px auto; padding: 0 20px; }
+  .bar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .bar p { color: #9fb2d8; font-size: 13px; }
+  button { border: 0; border-radius: 8px; padding: 9px 16px; cursor: pointer; font-size: 13px; font-weight: 600; }
+  .primary { background: linear-gradient(135deg, #f5b941, #e09f1f); color: #231a05; }
+  .ghost { background: #1c3560; color: #dbe6fa; border: 1px solid #33507f; }
+  .danger { background: #5c1f24; color: #ffb4b4; border: 1px solid #8a3a40; }
+  table { width: 100%; border-collapse: collapse; background: rgba(255,255,255,.04); border-radius: 12px; overflow: hidden; }
+  th, td { padding: 11px 14px; text-align: right; font-size: 13px; border-bottom: 1px solid rgba(255,255,255,.07); }
+  th { background: rgba(245,185,65,.12); color: #f5d68a; font-weight: 700; }
+  tr:hover td { background: rgba(255,255,255,.03); }
+  .pill { display: inline-block; padding: 2px 10px; border-radius: 20px; font-size: 11.5px; background: #1c3560; color: #bcd0f5; }
+  .pill.off { background: #4a2020; color: #ffb4b4; }
+  .acts button { margin-inline-end: 6px; padding: 6px 10px; font-size: 12px; }
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.6); display: none; align-items: center; justify-content: center; z-index: 50; }
+  .modal-bg.on { display: flex; }
+  .modal { background: #12244a; border: 1px solid #33507f; border-radius: 14px; width: 640px; max-width: 94vw; max-height: 88vh; overflow: auto; padding: 22px 26px; }
+  .modal h2 { font-size: 16px; color: #f5b941; margin-bottom: 14px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  label { display: block; font-size: 12px; color: #9fb2d8; margin-bottom: 4px; }
+  input, select { width: 100%; padding: 9px 12px; border-radius: 8px; border: 1px solid #33507f; background: #0d1c38; color: #fff; font-size: 13px; }
+  .perms { margin-top: 14px; border-top: 1px solid #33507f; padding-top: 10px; }
+  .perms h3 { font-size: 13px; color: #f5d68a; margin-bottom: 8px; }
+  .perm-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px 14px; max-height: 220px; overflow: auto; }
+  .perm-grid label { display: flex; align-items: center; gap: 7px; color: #c9d6f2; font-size: 12.5px; cursor: pointer; }
+  .perm-grid input { width: auto; }
+  .mfoot { display: flex; gap: 8px; justify-content: flex-start; margin-top: 16px; }
+  .err { color: #ff9d9d; font-size: 12.5px; margin-top: 8px; min-height: 16px; }
+  .ok { color: #9fe6a0; font-size: 12.5px; margin-top: 8px; min-height: 16px; }
+  .empty { text-align: center; color: #9fb2d8; padding: 40px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🛡️ إدارة الحسابات والصلاحيات</h1>
+  <div>
+    <span class="who" id="who"></span>
+    <a href="/">→ العودة للنظام</a>
+    <a href="#" id="logout">تسجيل الخروج</a>
+  </div>
+</header>
+<main>
+  <div class="bar">
+    <p>إنشاء حسابات غير محدودة وتحديد صلاحيات كل حساب — كلمات المرور مشفّرة (PBKDF2) ولا يمكن تغييرها إلا من هذه الواجهة.</p>
+    <button class="primary" id="addBtn">+ حساب جديد</button>
+  </div>
+  <div id="list"><div class="empty">جاري التحميل…</div></div>
+</main>
+
+<div class="modal-bg" id="mbg">
+  <div class="modal">
+    <h2 id="mTitle">حساب جديد</h2>
+    <div class="grid">
+      <div><label>اسم المستخدم (إنجليزي — الدخول به)</label><input id="fUser" dir="ltr" placeholder="operator.x"></div>
+      <div><label>الاسم الظاهر</label><input id="fName" placeholder="مثال: وائل حمدي"></div>
+      <div><label>الدور (يضبط الصلاحيات تلقائيًا — يمكن تعديلها يدويًا)</label>
+        <select id="fRole"></select></div>
+      <div><label id="pwLabel">كلمة المرور (8+ أحرف)</label><input id="fPass" type="password" dir="ltr"></div>
+      <div style="grid-column:1/-1"><label><input type="checkbox" id="fActive" checked style="width:auto"> الحساب نشط</label></div>
+    </div>
+    <div class="perms"><h3>الصلاحيات</h3><div class="perm-grid" id="permGrid"></div></div>
+    <div class="err" id="mErr"></div>
+    <div class="mfoot">
+      <button class="primary" id="mSave">حفظ</button>
+      <button class="ghost" id="mCancel">إلغاء</button>
+      <button class="danger" id="mDelete" style="display:none">حذف الحساب</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let ME = null, USERS = [], CATALOG = null, EDIT_ID = null;
+const $ = (s) => document.querySelector(s);
+const $$ = (s) => [...document.querySelectorAll(s)];
+
+async function api(path, opts = {}) {
+  const o = { method: opts.method || 'GET', headers: { 'Content-Type': 'application/json' } };
+  if (opts.body !== undefined) o.body = JSON.stringify(opts.body);
+  const r = await fetch(path, o);
+  const d = await r.json().catch(() => ({}));
+  if (r.status === 401) { location.href = '/login?next=/admin'; throw new Error('login'); }
+  if (!r.ok) throw new Error(d.detail || 'خطأ');
+  return d;
+}
+
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+
+async function boot() {
+  try {
+    const me = await api('/api/auth/me');
+    ME = me.user;
+    if (!ME.permissions.includes('admin.users')) { document.body.innerHTML = '<div class="empty" style="padding-top:15vh">⛔ ليس لديك صلاحية إدارة الحسابات</div>'; return; }
+    $('#who').textContent = 'مسجل الدخول: ' + ME.display_name + ' (' + ME.username + ')';
+    const data = await api('/api/admin/users');
+    USERS = data.users; CATALOG = data.catalog;
+    render();
+  } catch (e) { if (e.message !== 'login') $('#list').innerHTML = '<div class="empty">تعذر التحميل: ' + esc(e.message) + '</div>'; }
+}
+
+function render() {
+  const roleOpts = Object.entries(CATALOG.roles).map(([k,v]) => `<option value="${k}">${v}</option>`).join('');
+  $('#fRole').innerHTML = roleOpts;
+  $('#permGrid').innerHTML = Object.entries(CATALOG.permissions).map(([k,v]) =>
+    `<label><input type="checkbox" value="${k}"> ${v} <span class="pill" dir="ltr">${k}</span></label>`).join('');
+  $('#list').innerHTML = `<table><tr><th>اسم المستخدم</th><th>الاسم الظاهر</th><th>الدور</th><th>الصلاحيات</th><th>الحالة</th><th>جلسات نشطة</th><th>إجراءات</th></tr>` +
+    USERS.map(u => `<tr>
+      <td dir="ltr">${esc(u.username)}</td><td>${esc(u.display_name)}</td>
+      <td><span class="pill">${esc(u.role_label || u.role)}</span></td>
+      <td>${u.permissions.length} / ${Object.keys(CATALOG.permissions).length}</td>
+      <td>${u.active ? '<span class="pill">نشط</span>' : '<span class="pill off">معطّل</span>'}</td>
+      <td>${u.sessions}</td>
+      <td class="acts">
+        <button class="ghost" onclick="openEdit(${u.id})">تعديل</button>
+        <button class="ghost" onclick="resetPw(${u.id})">كلمة مرور</button>
+        ${u.id !== ME.id ? `<button class="danger" onclick="delUser(${u.id})">حذف</button>` : ''}
+      </td></tr>`).join('') + '</table>';
+}
+
+function presetPerms(role) { return CATALOG.presets[role] || []; }
+
+function openModal(u) {
+  EDIT_ID = u ? u.id : null;
+  $('#mTitle').textContent = u ? 'تعديل: ' + u.username : 'حساب جديد';
+  $('#fUser').value = u ? u.username : ''; $('#fUser').disabled = !!u;
+  $('#fName').value = u ? u.display_name : '';
+  $('#fRole').value = u ? u.role : 'operator';
+  $('#fPass').value = ''; $('#pwLabel').textContent = u ? 'كلمة مرور جديدة (اتركها فارغة لعدم التغيير)' : 'كلمة المرور (8+ أحرف)';
+  $('#fActive').checked = u ? !!u.active : true;
+  $('#mDelete').style.display = u && u.id !== ME.id ? '' : 'none';
+  // permissions: explicit list if set, else role preset
+  const perms = (u && u.permissions && u.permissions.length) ? u.permissions : presetPerms(u ? u.role : 'operator');
+  $$('#permGrid input').forEach(cb => cb.checked = perms.includes(cb.value));
+  $('#mErr').textContent = ''; $('#mbg').classList.add('on');
+}
+
+$('#addBtn').onclick = () => openModal(null);
+$('#mCancel').onclick = () => $('#mbg').classList.remove('on');
+$('#mbg').addEventListener('click', e => { if (e.target === $('#mbg')) $('#mbg').classList.remove('on'); });
+$('#fRole').addEventListener('change', () => {
+  if (!EDIT_ID) $$('#permGrid input').forEach(cb => cb.checked = presetPerms($('#fRole').value).includes(cb.value));
+});
+
+$('#mSave').onclick = async () => {
+  const perms = $$('#permGrid input:checked').map(cb => cb.value);
+  const body = { display_name: $('#fName').value.trim(), role: $('#fRole').value,
+                 permissions: perms, active: $('#fActive').checked };
+  try {
+    if (EDIT_ID) {
+      await api('/api/admin/users/' + EDIT_ID, { method: 'PUT', body });
+      const pw = $('#fPass').value;
+      if (pw) { if (pw.length < 8) throw new Error('كلمة المرور 8 أحرف على الأقل');
+                await api('/api/admin/users/' + EDIT_ID + '/password', { method: 'POST', body: { password: pw } }); }
+    } else {
+      body.username = $('#fUser').value.trim(); body.password = $('#fPass').value;
+      await api('/api/admin/users', { method: 'POST', body });
+    }
+    $('#mbg').classList.remove('on'); boot();
+  } catch (e) { $('#mErr').textContent = e.message; }
+};
+
+window.openEdit = (id) => openModal(USERS.find(u => u.id === id));
+window.resetPw = async (id) => {
+  const pw = prompt('كلمة المرور الجديدة (8+ أحرف):');
+  if (!pw) return;
+  try { await api('/api/admin/users/' + id + '/password', { method: 'POST', body: { password: pw } }); boot(); }
+  catch (e) { alert(e.message); }
+};
+window.delUser = async (id) => {
+  const u = USERS.find(x => x.id === id);
+  if (!confirm('حذف الحساب «' + u.username + » نهائيًا؟')) return;
+  try { await api('/api/admin/users/' + id, { method: 'DELETE' }); boot(); }
+  catch (e) { alert(e.message); }
+};
+$('#mDelete').onclick = async () => { await delUser(EDIT_ID); $('#mbg').classList.remove('on'); };
+$('#logout').onclick = async (e) => { e.preventDefault(); await fetch('/api/auth/logout', { method: 'POST' }); location.href = '/login'; };
+
+boot();
+</script>
+</body>
+</html>

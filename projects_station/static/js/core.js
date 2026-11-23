@@ -38,6 +38,10 @@ async function api(path, opts = {}) {
   try { res = await fetch(path, o); } catch (e) { toast('تعذر الاتصال بالخادم المحلي — تأكد أن البرنامج يعمل', 'err'); throw e; }
   const ct = res.headers.get('content-type') || '';
   const data = ct.includes('json') ? await res.json() : await res.text();
+  if (res.status === 401 && !path.startsWith('/api/auth/')) {
+    location.href = '/login?next=' + encodeURIComponent(location.pathname + location.hash);
+    const err = new Error('unauthorized'); err.status = 401; throw err;
+  }
   if (!res.ok) {
     let msg = data && data.detail ? data.detail : 'حدث خطأ';
     if (Array.isArray(msg)) msg = 'بيانات غير مكتملة أو غير صالحة: ' + msg.map((d) => (d.loc || []).slice(-1)[0]).join('، ');
@@ -150,21 +154,30 @@ function showAlerts() {
   bindAlertClicks(m.el);
 }
 
-function editOperator() {
-  const m = modal({ title: 'اسم المشغل', body: `<div class="field"><label>الاسم والرتبة (يُسجل مع كل إجراء في سجل التدقيق)</label><input class="inp" id="opIn" value="${esc(operator())}"></div>`,
-    footer: '<button class="btn primary" id="opSave">حفظ</button><button class="btn" data-close>إلغاء</button>' });
-  $('#opSave', m.el).onclick = () => { const v = $('#opIn', m.el).value.trim(); if (v) { localStorage.setItem('operator', v); $('#operatorName').textContent = v; } m.close(); };
+function accountMenu() {
+  const u = App.user || {};
+  const canAdmin = (u.permissions || []).includes('admin.users');
+  const m = modal({ title: 'الحساب', body: `<div style="text-align:center;padding:10px 0">
+      <div style="font-size:36px">👤</div>
+      <div style="font-weight:700;font-size:16px;margin-top:6px">${esc(u.display_name || '')}</div>
+      <div class="muted" dir="ltr" style="font-size:12px">${esc(u.username || '')}</div>
+      <div class="muted" style="margin-top:8px;font-size:12px">الدور: ${esc(u.role_label || u.role || '')} · الصلاحيات: ${(u.permissions || []).length}</div>
+    </div>`,
+    footer: `${canAdmin ? '<a class="btn" href="/admin" style="text-decoration:none;display:inline-block">🛡️ إدارة الحسابات</a>' : ''}<button class="btn primary" id="acctLogout">تسجيل الخروج</button><button class="btn" data-close>إغلاق</button>` });
+  $('#acctLogout', m.el).onclick = async () => { try { await fetch('/api/auth/logout', { method: 'POST' }); } finally { location.href = '/login'; } };
 }
 
 function hashParams() { const q = (location.hash.split('?')[1] || ''); return Object.fromEntries(new URLSearchParams(q)); }
 
 async function boot() {
+  const me = await api('/api/auth/me');
+  App.user = me.user;
   App.meta = await api('/api/meta');
   const s = App.meta.settings;
   $('#unitName').textContent = s.operator_unit; $('#stationName').textContent = s.station_name;
-  $('#operatorName').textContent = operator();
+  $('#operatorName').textContent = App.user.display_name || App.user.username;
   $('#navFoot').innerHTML = `الجهاز: <span class="mono">${esc(App.meta.device)}</span><br>قاعدة البيانات: SQLite محلية<br>وضع التشغيل: بدون إنترنت`;
-  $('#bellBtn').onclick = showAlerts; $('.operator').onclick = editOperator;
+  $('#bellBtn').onclick = showAlerts; $('#accountChip').onclick = accountMenu;
   setInterval(tickClock, 1000); tickClock();
   refreshHeader(); setInterval(refreshHeader, 30000);
   window.addEventListener('hashchange', route);

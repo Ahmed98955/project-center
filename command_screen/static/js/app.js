@@ -34,6 +34,10 @@ async function api(path, opts = {}) {
   try { res = await fetch(path, o); } catch (e) { toast('تعذر الاتصال بشاشة القائد', 'err'); throw e; }
   const ct = res.headers.get('content-type') || '';
   const data = ct.includes('json') ? await res.json() : await res.text();
+  if (res.status === 401 && !path.startsWith('/api/auth/')) {
+    location.href = '/login?next=' + encodeURIComponent(location.pathname + location.hash);
+    const err = new Error('unauthorized'); err.status = 401; throw err;
+  }
   if (!res.ok) {
     const msg = data && data.detail ? data.detail : 'حدث خطأ';
     if (!opts.silent) toast(msg, 'err');
@@ -635,11 +639,18 @@ function openSettings() {
       <div class="field" style="margin-bottom:12px"><label>عنوان محطة المشروعات</label>
         <input class="inp fld" id="stUrl" value="${esc(s.station_url)}" style="width:100%;margin-top:6px">
         <div class="muted" style="margin-top:6px">عند نقل الشاشة لجهاز آخر غيّر هذا العنوان إلى IP جهاز المحطة (مثل http://192.168.1.10:8765) — بدون أي تعديل في الكود.</div></div>
+      <div class="field" style="margin-bottom:12px"><label>مستخدم حساب المزامنة على المحطة</label>
+        <input class="inp fld" id="stUser" value="${esc(s.station_user || 'sync')}" dir="ltr" style="width:100%;margin-top:6px"></div>
+      <div class="field" style="margin-bottom:12px"><label>كلمة مرور حساب المزامنة (اتركها فارغة لعدم التغيير)</label>
+        <input class="inp fld" id="stPass" type="password" dir="ltr" style="width:100%;margin-top:6px" placeholder="••••••••"></div>
       <div class="muted">الجهاز: <span class="mono">${esc(App.meta?.device || '')}</span> · الوضع: مزامنة كل ثانيتين من المحطة.</div>`,
       footer: '<button class="btn primary" id="stSave">حفظ</button><button class="btn" data-close>إغلاق</button>' });
     $('#stSave', m.el).onclick = async () => {
       const v = $('#stUrl', m.el).value.trim();
-      try { await api('/api/settings', { method: 'PUT', body: { station_url: v } }); toast('تم حفظ الإعدادات — جاري إعادة الاتصال', 'ok'); m.close(); setTimeout(refreshKpis, 2500); }
+      const body = { station_url: v, station_user: $('#stUser', m.el).value.trim() };
+      const pw = $('#stPass', m.el).value;
+      if (pw) body.station_pass = pw;
+      try { await api('/api/settings', { method: 'PUT', body }); toast('تم حفظ الإعدادات — جاري إعادة الاتصال', 'ok'); m.close(); setTimeout(refreshKpis, 2500); }
       catch (e) { }
     };
   });
@@ -702,8 +713,24 @@ function applyRefreshPref() {
   };
 }
 
+function accountMenu() {
+  const u = App.user || {};
+  const canAdmin = (u.permissions || []).includes('admin.users');
+  const m = modal({ title: 'الحساب', body: `<div style="text-align:center;padding:10px 0">
+      <div style="font-size:36px">🎖️</div>
+      <div style="font-weight:700;font-size:16px;margin-top:6px">${esc(u.display_name || '')}</div>
+      <div class="muted" dir="ltr" style="font-size:12px">${esc(u.username || '')}</div>
+      <div class="muted" style="margin-top:8px;font-size:12px">الدور: ${esc(u.role_label || u.role || '')} · الصلاحيات: ${(u.permissions || []).length}</div>
+    </div>`,
+    footer: `${canAdmin ? '<a class="btn" href="/admin" style="text-decoration:none;display:inline-block">🛡️ إدارة الحسابات</a>' : ''}<button class="btn primary" id="acctLogout">تسجيل الخروج</button><button class="btn" data-close>إغلاق</button>` });
+  $('#acctLogout', m.el).onclick = async () => { try { await fetch('/api/auth/logout', { method: 'POST' }); } finally { location.href = '/login'; } };
+}
+
 /* ================= boot ================= */
 async function boot() {
+  try { const me = await api('/api/auth/me'); App.user = me.user; } catch (e) { App.user = null; }
+  if (App.user) { const n = $('#userName'); if (n) n.textContent = ' ' + (App.user.display_name || App.user.username); }
+  $('#accountBtn').onclick = accountMenu;
   try { App.meta = await api('/api/meta'); } catch (e) { App.meta = null; }
   applyTheme(localStorage.getItem('cmdTheme') || 'light');
   $('#themeBtn').onclick = () => {

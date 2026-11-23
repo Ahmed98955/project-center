@@ -1,5 +1,6 @@
 import json
 import re
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
@@ -11,7 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from . import config, db, detection, estimation, geo, seed, workflow
+from . import auth, config, db, detection, estimation, geo, seed, workflow
 from .textnorm import normalize
 from .workflow import FAX_TYPES, PRIORITIES, STATUS_LABELS
 
@@ -22,6 +23,7 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="محطة قسم المشروعات", docs_url="/api/docs", redoc_url=None, lifespan=lifespan)
+app.add_middleware(auth.AuthGate)
 
 AVAILABILITY = {"available": "متاح", "needs_approval": "يحتاج تصديق", "shortage": "عجز"}
 KINDS = {"route": "مسار كابل", "splice": "وصلة", "checkpoint": "غرفة تفتيش", "junction": "نقطة ربط", "exchange": "عقدة / سنترال"}
@@ -41,6 +43,9 @@ def get_conn():
 
 
 def actor(request: Request) -> str:
+    u = getattr(request.state, "user", None)
+    if u:
+        return u.get("display_name") or u.get("username") or "مستخدم"
     return unquote(request.headers.get("X-Operator", "")) or "مشغل المشروعات"
 
 
@@ -1049,6 +1054,188 @@ def health():
     return {"ok": True, "device": db.DEVICE, "time": db.now()}
 
 
+# ---------------------------------------------------------------- auth (IAM)
+class LoginIn(BaseModel):
+    username: str = Field(min_length=1, max_length=80)
+    password: str = Field(min_length=1, max_length=200)
+
+
+@app.post("/api/auth/login")
+def login(body: LoginIn, request: Request, conn=Depends(get_conn)):
+    username = body.username.strip()
+    key = f"{auth._client_ip(request)}|{username.lower()}"
+    if auth._throttled(key):
+        raise HTTPException(429, "محاولات دخول كثيرة — انتظر 5 دقائق ثم أعد المحاولة")
+    user = auth.get_user_by_username(conn, username)
+    if not user or not user["active"] or not auth.verify_password(body.password, user["password_hash"]):
+        auth._record_fail(key)
+        db._audit(conn, "LOGIN_FAIL", "users", user["id"] if user else None,
+                  None, {"username": username, "ip": auth._client_ip(request)}, "anonymous")
+        raise HTTPException(401, "اسم المستخدم أو كلمة المرور غير صحيحة")
+    auth._failures.pop(key, None)
+    token = auth.create_session(conn, user["id"])
+    conn.execute("UPDATE users SET last_login_at=? WHERE id=?", (db.now(), user["id"]))
+    db._audit(conn, "LOGIN", "users", user["id"], None, {"username": user["username"]}, user["display_name"])
+    conn.commit()   # session must exist before the response — next request may arrive instantly
+    resp = JSONResponse({"user": auth.public_user(user)})
+    resp.set_cookie(auth.COOKIE_NAME, token, max_age=auth.SESSION_TTL,
+                    httponly=True, samesite="lax", path="/")
+    return resp
+
+
+@app.post("/api/auth/logout")
+def logout(request: Request, conn=Depends(get_conn)):
+    token = request.cookies.get(auth.COOKIE_NAME, "")
+    if token:
+        auth.destroy_session(conn, token)
+    resp = JSONResponse({"ok": True})
+    resp.delete_cookie(auth.COOKIE_NAME, path="/")
+    return resp
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request):
+    user = auth.current_user(request)
+    return {"user": auth.public_user(user)}
+
+
+@app.get("/api/auth/permissions")
+def auth_permissions(user=Depends(auth.require_perm("admin.users"))):
+    return {"permissions": auth.PERMISSIONS, "roles": auth.ROLE_LABELS,
+            "presets": auth.ROLE_PRESETS}
+
+
+# ---------------------------------------------------------------- admin: account management
+_USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{1,59}$")
+
+
+class AdminUserIn(BaseModel):
+    username: str = Field(min_length=2, max_length=60)
+    display_name: str = Field(min_length=1, max_length=120)
+    password: Optional[str] = None
+    role: str = "operator"
+    permissions: Optional[list[str]] = None
+    active: bool = True
+
+
+class AdminUserPatch(BaseModel):
+    display_name: Optional[str] = Field(default=None, min_length=1, max_length=120)
+    role: Optional[str] = None
+    permissions: Optional[list[str]] = None
+    active: Optional[bool] = None
+
+
+class PasswordIn(BaseModel):
+    password: str = Field(min_length=8, max_length=200)
+
+
+def _clean_perms(perms):
+    if perms is None:
+        return None
+    bad = [p for p in perms if p not in auth.PERMISSIONS]
+    if bad:
+        raise HTTPException(400, f"صلاحيات غير معروفة: {', '.join(bad)}")
+    return json.dumps(list(dict.fromkeys(perms)), ensure_ascii=False)
+
+
+def _get_user_or_404(conn, uid: int):
+    u = db.one(conn, "SELECT * FROM users WHERE id=?", (uid,))
+    if not u:
+        _404("المستخدم")
+    return u
+
+
+@app.get("/api/admin/users")
+def admin_users(conn=Depends(get_conn)):
+    out = []
+    for r in db.rows(conn, "SELECT * FROM users ORDER BY id"):
+        u = auth.public_user(r)
+        u["sessions"] = conn.execute("SELECT COUNT(*) FROM sessions WHERE user_id=? AND expires_at>?",
+                                     (r["id"], time.time())).fetchone()[0]
+        out.append(u)
+    return {"users": out, "catalog": {"permissions": auth.PERMISSIONS,
+                                      "roles": auth.ROLE_LABELS,
+                                      "presets": auth.ROLE_PRESETS}}
+
+
+@app.post("/api/admin/users")
+def admin_create_user(body: AdminUserIn, conn=Depends(get_conn), who: str = Depends(actor)):
+    username = body.username.strip()
+    if not _USERNAME_RE.match(username):
+        raise HTTPException(400, "اسم المستخدم يجب أن يكون أحرفًا/أرقامًا و . _ - فقط (2-60 حرفًا)")
+    if auth.get_user_by_username(conn, username):
+        raise HTTPException(400, "اسم المستخدم مستخدم بالفعل")
+    if body.role not in auth.ROLE_PRESETS:
+        raise HTTPException(400, "دور غير معروف")
+    if not body.password or len(body.password) < 8:
+        raise HTTPException(400, "كلمة المرور مطلوبة (8 أحرف على الأقل)")
+    perms_json = _clean_perms(body.permissions)
+    cur = conn.execute(
+        "INSERT INTO users(username, display_name, password_hash, role, permissions, active, created_at)"
+        " VALUES (?,?,?,?,?,?,?)",
+        (username, body.display_name.strip(), auth.hash_password(body.password), body.role,
+         perms_json, 1 if body.active else 0, db.now()))
+    uid = cur.lastrowid
+    db._audit(conn, "CREATE", "users", uid, None,
+              {"username": username, "role": body.role}, who)
+    return {"ok": True, "id": uid}
+
+
+@app.put("/api/admin/users/{uid}")
+def admin_update_user(uid: int, body: AdminUserPatch, request: Request,
+                      conn=Depends(get_conn), who: str = Depends(actor)):
+    u = _get_user_or_404(conn, uid)
+    me = auth.current_user(request)
+    is_self = me["id"] == uid
+    new_active = u["active"] if body.active is None else (1 if body.active else 0)
+    new_role = u["role"] if body.role is None else body.role
+    new_perms = u["permissions"] if body.permissions is None else _clean_perms(body.permissions)
+    if new_role not in auth.ROLE_PRESETS:
+        raise HTTPException(400, "دور غير معروف")
+    if is_self and (not new_active or "admin.users" not in auth.effective_permissions(
+            {**u, "role": new_role, "permissions": new_perms})):
+        raise HTTPException(400, "لا يمكنك تعطيل حسابك أو سحب صلاحية الإدارة من نفسك")
+    conn.execute("UPDATE users SET display_name=?, role=?, permissions=?, active=? WHERE id=?",
+                 (body.display_name.strip() if body.display_name else u["display_name"],
+                  new_role, new_perms, new_active, uid))
+    if not new_active:
+        conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+    db._audit(conn, "UPDATE", "users", uid,
+              {"display_name": u["display_name"], "role": u["role"], "active": u["active"]},
+              {"display_name": body.display_name, "role": new_role, "active": new_active}, who)
+    conn.commit()
+    return {"ok": True}
+
+
+@app.post("/api/admin/users/{uid}/password")
+def admin_reset_password(uid: int, body: PasswordIn, conn=Depends(get_conn), who: str = Depends(actor)):
+    _get_user_or_404(conn, uid)
+    conn.execute("UPDATE users SET password_hash=? WHERE id=?", (auth.hash_password(body.password), uid))
+    conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))   # force re-login everywhere
+    db._audit(conn, "PASSWORD_RESET", "users", uid, None, {"by": who}, who)
+    conn.commit()   # apply before response — session kill must not race
+    return {"ok": True}
+
+
+@app.delete("/api/admin/users/{uid}")
+def admin_delete_user(uid: int, request: Request, conn=Depends(get_conn), who: str = Depends(actor)):
+    u = _get_user_or_404(conn, uid)
+    me = auth.current_user(request)
+    if me["id"] == uid:
+        raise HTTPException(400, "لا يمكنك حذف حسابك الحالي")
+    if u["role"] == "admin" or "admin.users" in auth.effective_permissions(u):
+        others = conn.execute(
+            "SELECT COUNT(*) FROM users WHERE id!=? AND active=1 AND (role='admin' OR permissions LIKE '%admin.users%')",
+            (uid,)).fetchone()[0]
+        if not others:
+            raise HTTPException(400, "لا يمكن حذف آخر حساب إدارة نشط")
+    conn.execute("DELETE FROM sessions WHERE user_id=?", (uid,))
+    conn.execute("DELETE FROM users WHERE id=?", (uid,))
+    db._audit(conn, "DELETE", "users", uid, {"username": u["username"]}, None, who)
+    conn.commit()
+    return {"ok": True}
+
+
 # ---------------------------------------------------------------- static UI
 app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 
@@ -1056,3 +1243,13 @@ app.mount("/static", StaticFiles(directory=config.STATIC_DIR), name="static")
 @app.get("/")
 def index():
     return FileResponse(config.STATIC_DIR / "index.html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/login")
+def login_page():
+    return FileResponse(config.STATIC_DIR / "login.html", headers={"Cache-Control": "no-cache"})
+
+
+@app.get("/admin")
+def admin_page():
+    return FileResponse(config.STATIC_DIR / "admin.html", headers={"Cache-Control": "no-cache"})

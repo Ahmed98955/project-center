@@ -71,12 +71,18 @@ def client():
     conn.commit()
     conn.close()
     with TestClient(app) as c:
+        r = c.post("/api/auth/login", json={"username": "admin", "password": "Admin@2026"})
+        assert r.status_code == 200, r.text
         yield c
 
 
 @pytest.fixture()
 def station():
-    return httpx.Client(base_url=BASE, timeout=15)
+    c = httpx.Client(base_url=BASE, timeout=15)
+    r = c.post("/api/auth/login", json={"username": "admin", "password": "Admin@2026"})
+    assert r.status_code == 200, r.text
+    yield c
+    c.close()
 
 
 def pytest_sessionfinish(session, exitstatus):

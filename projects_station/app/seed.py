@@ -4,7 +4,7 @@ import random
 import shutil
 from datetime import datetime, timedelta
 
-from . import config, db, defaults, estimation, geo
+from . import auth, config, db, defaults, estimation, geo
 from .textnorm import normalize
 
 ACTOR = "النظام (بيانات تجريبية)"
@@ -259,6 +259,7 @@ def ensure_database(reset=False):
     fresh = not config.DB_PATH.exists()
     with db.transaction() as conn:
         db.init_schema(conn)
+        auth.seed_users(conn)
         seed_reference(conn)
         if fresh or not conn.execute("SELECT 1 FROM routes_sites LIMIT 1").fetchone():
             seed_demo(conn)

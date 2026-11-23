@@ -20,6 +20,8 @@ from app.main import app  # noqa: E402
 def client():
     seed.ensure_database(reset=True)
     with TestClient(app) as c:
+        r = c.post("/api/auth/login", json={"username": "admin", "password": "Admin@2026"})
+        assert r.status_code == 200, r.text
         yield c
 
 
