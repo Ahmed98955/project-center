@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>محطة قسم المشروعات — نظام إدارة العمليات والمشروعات</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css?v=1795374139">
+<link rel="stylesheet" href="/static/vendor/leaflet-draw/leaflet.draw.css?v=1795374139">
+<link rel="stylesheet" href="/static/css/app.css?v=1795374139">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">⚡</div>
+    <div>
+      <div class="brand-title" id="unitName">سلاح الإشارة — فوج إنشاءات خطية ثقيلة</div>
+      <div class="brand-sub"><span id="stationName">محطة قسم المشروعات</span> · نموذج محاكاة وتشغيل محلي</div>
+    </div>
+  </div>
+  <div class="top-kpis" id="topKpis"></div>
+  <div class="top-right">
+    <button class="bell" id="bellBtn" title="التنبيهات">🔔<span class="badge" id="bellCount" hidden>0</span></button>
+    <div class="operator" title="اسم المشغل (يُسجل في سجل التدقيق)">👤 <span id="operatorName"></span></div>
+    <div class="clock" id="clock"></div>
+  </div>
+</header>
+<nav class="sidenav" id="sidenav">
+  <a href="#/dashboard" data-page="dashboard"><i>📊</i>لوحة المتابعة</a>
+  <a href="#/faxes" data-page="faxes"><i>📠</i>الفاكسات الواردة</a>
+  <a href="#/map" data-page="map"><i>🗺️</i>الخريطة العامة</a>
+  <a href="#/history" data-page="history"><i>🗂️</i>السجل التاريخي</a>
+  <a href="#/teams" data-page="teams"><i>👥</i>الأطقم والمفارز</a>
+  <a href="#/routes" data-page="routes"><i>🧵</i>المسارات والوصلات</a>
+  <a href="#/equipment" data-page="equipment"><i>🧰</i>المعدات والإرشادات</a>
+  <a href="#/settings" data-page="settings"><i>⚙️</i>الإعدادات</a>
+  <a href="#/audit" data-page="audit"><i>🛡️</i>سجل التدقيق</a>
+  <div class="nav-foot" id="navFoot"></div>
+</nav>
+<main id="app"></main>
+<div id="toasts"></div>
+<div id="modalRoot"></div>
+<script src="/static/vendor/leaflet/leaflet.js?v=1795374139"></script>
+<script src="/static/vendor/leaflet-draw/leaflet.draw.js?v=1795374139"></script>
+<script src="/static/js/core.js?v=1795374139"></script>
+<script src="/static/js/map.js?v=1795374139"></script>
+<script src="/static/js/pages.js?v=1795374139"></script>
+<script src="/static/js/workbench.js?v=1795374139"></script>
+<script src="/static/js/command.js?v=1795374139"></script>
+</body>
+</html>

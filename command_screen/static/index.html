@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl" translate="no">
+<head>
+<meta charset="utf-8">
+<meta name="google" content="notranslate">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>شاشة القائد — نظام إدارة العمليات والمشروعات</title>
+<link rel="stylesheet" href="/static/vendor/leaflet/leaflet.css?v=1795374139">
+<link rel="stylesheet" href="/static/css/app.css?v=1795374139">
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <div class="logo">🎖️</div>
+    <div>
+      <div class="brand-title">شاشة القائد</div>
+      <div class="brand-sub">سلاح الإشارة — فوج إنشاءات خطية ثقيلة · العرض الموقفي والمتابعة</div>
+    </div>
+  </div>
+  <div class="top-kpis" id="topKpis"></div>
+  <div class="top-right">
+    <div class="conn" id="connBox" title="حالة الاتصال بمحطة المشروعات">
+      <span class="dot" id="connDot"></span><span id="connText">…</span>
+      <span class="muted" id="lastUpdate"></span>
+    </div>
+    <button class="icon-btn" id="alertsBtn" title="التنبيهات">🔔<span class="badge" id="alertsBadge" hidden></span></button>
+    <select class="top-sel" id="refreshSel" title="التحديث التلقائي للبيانات">
+      <option value="0">تحديث: معطل</option>
+      <option value="5">تحديث كل 5 د</option>
+      <option value="10">تحديث كل 10 د</option>
+      <option value="30">تحديث كل 30 د</option>
+    </select>
+    <button class="icon-btn" id="themeBtn" title="تبديل المظهر الفاتح/الداكن">☀️</button>
+    <button class="icon-btn" id="settingsBtn" title="الإعدادات">⚙️</button>
+    <div class="clock" id="clock"></div>
+  </div>
+</header>
+<nav class="viewnav" id="viewnav">
+  <a href="#/map" data-view="map"><i>🗺️</i>الخريطة العملياتية</a>
+  <a href="#/ops" data-view="ops"><i>📋</i>سجل العمليات</a>
+  <a href="#/ref" data-view="ref"><i>🧭</i>البيانات المرجعية</a>
+</nav>
+<main id="app"></main>
+<div id="toasts"></div>
+<div id="modalRoot"></div>
+<script src="/static/vendor/leaflet/leaflet.js?v=1795374139"></script>
+<script src="/static/js/app.js?v=1795374139"></script>
+</body>
+</html>
